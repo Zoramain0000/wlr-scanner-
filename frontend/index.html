@@ -1,4 +1,4 @@
-  <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -201,7 +201,7 @@
         let user = JSON.parse(localStorage.getItem('user') || 'null');
         let isAuthenticated = !!token;
 
-        // Socket.IO
+        // Socket.IO & Map
         const socket = io('http://localhost:3000');
         let map, userMarker;
 
@@ -211,16 +211,19 @@
         function init() {
             updateAuthUI();
             initMap();
+            loadMyLog();
+            loadLeaderboard();
+            
             socket.on('connect', () => {
                 document.getElementById('status').textContent = `Connected: ${socket.id.slice(0,8)}`;
-                if (isAuthenticated) socket.emit('auth', token);
+                if (isAuthenticated) {
+                    socket.auth = { token };
+                    socket.connect();
+                }
             });
+            
             socket.on('qsos', updateMap);
             socket.on('leaderboard', updateLeaderboard);
-            socket.on('auth:ok', () => console.log('Socket authenticated'));
-            
-            // Callsign lookup
-            document.getElementById('callsign').addEventListener('blur', lookupCallsign);
         }
 
         function updateAuthUI() {
@@ -231,34 +234,27 @@
             document.getElementById('addBtn').disabled = !isAuthenticated;
         }
 
-        // Auth Functions
+        // Auth Functions (Backend:3000)
         async function login() {
             const email = document.getElementById('loginEmail').value;
             const password = document.getElementById('loginPassword').value;
             
-            try {
-                const res = await fetch('/api/auth/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email, password })
-                });
-                const data = await res.json();
-                
-                if (res.ok) {
-                    token = data.token;
-                    user = data.user;
-                    localStorage.setItem('token', token);
-                    localStorage.setItem('user', JSON.stringify(user));
-                    isAuthenticated = true;
-                    hideLogin();
-                    updateAuthUI();
-                    socket.emit('auth', token);
-                } else {
-                    alert(data.message || 'Login failed');
-                }
-            } catch (err) {
-                alert('Network error');
-            }
+            const res = await fetch('http://localhost:3000/api/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, password })
+            });
+            const data = await res.json();
+            
+            if (res.ok) {
+                token = data.token; user = data.user;
+                localStorage.setItem('token', token);
+                localStorage.setItem('user', JSON.stringify(user));
+                isAuthenticated = true;
+                hideLogin();
+                updateAuthUI();
+                loadMyLog();
+            } else alert(data.message);
         }
 
         async function register() {
@@ -266,37 +262,28 @@
             const email = document.getElementById('regEmail').value;
             const password = document.getElementById('regPassword').value;
             
-            try {
-                const res = await fetch('/api/auth/register', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ callsign, email, password })
-                });
-                const data = await res.json();
-                
-                if (res.ok) {
-                    token = data.token;
-                    user = data.user;
-                    localStorage.setItem('token', token);
-                    localStorage.setItem('user', JSON.stringify(user));
-                    isAuthenticated = true;
-                    hideRegister();
-                    updateAuthUI();
-                    socket.emit('auth', token);
-                } else {
-                    alert(data.message || 'Registration failed');
-                }
-            } catch (err) {
-                alert('Network error');
-            }
+            const res = await fetch('http://localhost:3000/api/auth/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ callsign, email, password })
+            });
+            const data = await res.json();
+            
+            if (res.ok) {
+                token = data.token; user = data.user;
+                localStorage.setItem('token', token);
+                localStorage.setItem('user', JSON.stringify(user));
+                isAuthenticated = true;
+                hideRegister();
+                updateAuthUI();
+                loadMyLog();
+            } else alert(data.message);
         }
 
         function logout() {
             localStorage.removeItem('token');
             localStorage.removeItem('user');
-            token = null;
-            user = null;
-            isAuthenticated = false;
+            token = null; user = null; isAuthenticated = false;
             updateAuthUI();
         }
 
@@ -306,26 +293,23 @@
         function showRegister() { document.getElementById('registerModal').style.display = 'flex'; }
         function hideRegister() { document.getElementById('registerModal').style.display = 'none'; }
 
-        // Map
+        // Map Functions
         function initMap() {
-            map = L.map('map').setView([0, 0], 2);
+            map = L.map('map').setView([39.8, -98.5], 3);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
         }
 
         function updateMap(qsos) {
-            // Clear existing markers
             map.eachLayer(layer => { if (layer instanceof L.Marker) map.removeLayer(layer); });
-            
             qsos.forEach(qso => {
                 if (qso.lat && qso.lon) {
-                    L.marker([qso.lat, qso.lon])
-                        .addTo(map)
+                    L.marker([qso.lat, qso.lon]).addTo(map)
                         .bindPopup(`${qso.callsign}<br>${qso.freq} ${qso.mode}`);
                 }
             });
         }
 
-        // QSO Logging (Auth Protected)
+        // QSO Functions
         async function addQSO() {
             if (!isAuthenticated) return alert('Login required');
             
@@ -334,81 +318,66 @@
                 rst: document.getElementById('rst').value,
                 freq: parseFloat(document.getElementById('freq').value),
                 mode: document.getElementById('mode').value,
-                band: document.getElementById('band').value,
-                timestamp: new Date().toISOString()
+                band: document.getElementById('band').value
             };
 
-            try {
-                const res = await fetch('/api/logs', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`
-                    },
-                    body: JSON.stringify(qso)
-                });
-                
-                if (res.ok) {
-                    socket.emit('qso', qso);
-                    clearForm();
-                    loadMyLog();
-                }
-            } catch (err) {
-                alert('Log failed');
+            const res = await fetch('http://localhost:3000/api/logs', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify(qso)
+            });
+            
+            if (res.ok) {
+                socket.emit('qso', qso);
+                clearForm();
+                loadMyLog();
             }
         }
 
         async function loadMyLog() {
             if (!isAuthenticated) return;
-            try {
-                const res = await fetch('/api/logs', {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-                const logs = await res.json();
-                updateLogDisplay(logs);
-            } catch (err) {}
+            const res = await fetch('http://localhost:3000/api/logs', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const logs = await res.json();
+            document.getElementById('log').innerHTML = logs.map(log => `
+                <div class="log-entry">
+                    <span>${log.callsign}</span><span>${log.rst}</span>
+                    <span>${log.freq}</span><span>${log.mode}</span>
+                    <span>${new Date(log.timestamp).toLocaleTimeString()}</span>
+                </div>`).join('');
         }
 
-        function updateLogDisplay(logs) {
-            const logDiv = document.getElementById('log');
-            logDiv.innerHTML = logs.map(log => `
-                <div class="log-entry">
-                    <span>${log.callsign}</span>
-                    <span>${log.rst}</span>
-                    <span>${log.freq}</span>
-                    <span>${log.mode}</span>
-                    <span>${new Date(log.timestamp).toLocaleTimeString()}</span>
-                </div>
-            `).join('');
+        async function loadLeaderboard() {
+            const res = await fetch('http://localhost:3000/api/leaderboard');
+            const data = await res.json();
+            document.getElementById('leaderboard').innerHTML = data.map((entry, i) => `
+                <li><span>#${i+1} ${entry.callsign}</span><span>${entry.count} QSOs</span></li>`).join('');
         }
 
         function updateLeaderboard(data) {
-            const lb = document.getElementById('leaderboard');
-            lb.innerHTML = data.map((entry, i) => `
-                <li><span>#${i+1} ${entry.callsign}</span><span>${entry.count} QSOs</span></li>
-            `).join('');
+            document.getElementById('leaderboard').innerHTML = data.map((entry, i) => `
+                <li><span>#${i+1} ${entry.callsign}</span><span>${entry.count} QSOs</span></li>`).join('');
         }
 
         function clearForm() {
-            document.getElementById('callsign').value = '';
-            document.getElementById('rst').value = '';
-            document.getElementById('freq').value = '';
-            document.getElementById('mode').value = '';
-            document.getElementById('band').value = '';
+            ['callsign','rst','freq','mode','band'].forEach(id => 
+                document.getElementById(id).value = '');
         }
 
-        async function lookupCallsign() {
+        // HamDB Lookup
+        document.getElementById('callsign').addEventListener('blur', async () => {
             const callsign = document.getElementById('callsign').value.toUpperCase();
             if (callsign.length < 3) return;
-            
             try {
                 const res = await fetch(`https://api.hamdb.org/v1/${callsign}/JSON`);
                 const data = await res.json();
-                if (data && data.callsign) {
-                    document.getElementById('band').value = data.band || '';
-                }
-            } catch (err) {}
-        }
+                if (data.callsign) document.getElementById('band').value = data.band || '';
+            } catch {}
+        });
     </script>
 </body>
 </html>
