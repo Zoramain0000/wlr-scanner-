@@ -1,15 +1,13 @@
-const mongoose = require('mongoose');
+  const mongoose = require('mongoose');
 
 const logSchema = new mongoose.Schema({
-    timestamp: { type: Date, default: Date.now, index: true },
-    callsign: { type: String, index: true },
-    name: String,
-    grid: String,
-    mode: String,
-    band: String,
-    country: String,
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
-    sessionId: String
+  callsign: { type: String, required: true },
+  rst: String,
+  freq: Number,
+  mode: String,
+  band: String,
+  timestamp: { type: Date, default: Date.now },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }
 });
 
 module.exports = mongoose.model('Log', logSchema);
