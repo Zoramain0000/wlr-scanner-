@@ -1,14 +1,11 @@
+require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const http = require('http');
 const socketIo = require('socket.io');
-const path = require('path');
-
-const apiRoutes = require('./routes/api');
 const authRoutes = require('./routes/auth');
-const Log = require('./models/Log');
-const User = require('./models/User');
+const apiRoutes = require('./routes/api');
 
 const app = express();
 const server = http.createServer(app);
@@ -16,46 +13,38 @@ const io = socketIo(server, { cors: { origin: "*" } });
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '../frontend')));
-
-// MongoDB
-mongoose.connect('mongodb://localhost:27017/wrl', {
-    useNewUrlParser: true,
-    useUnifiedTopology: true
-});
-
-// Routes
+app.use('/api/auth', authRoutes);
 app.use('/api', apiRoutes);
-app.use('/api/auth', authRoutes.router);
 
-// Serve frontend
-app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '../frontend/index.html'));
+mongoose.connect('mongodb://mongo:27017/wrl', { useNewUrlParser: true, useUnifiedTopology: true })
+  .then(() => console.log('✅ MongoDB connected'))
+  .catch(err => console.error('❌ MongoDB:', err));
+
+// Socket.IO Auth & Broadcasting
+io.use((socket, next) => {
+  const token = socket.handshake.auth.token;
+  if (token) {
+    try {
+      require('jsonwebtoken').verify(token, process.env.JWT_SECRET || 'wrl-secret-2026');
+      socket.user = true;
+      next();
+    } catch { next(new Error('Auth failed')); }
+  } else next(new Error('No token'));
 });
 
-// WebSocket
 io.on('connection', (socket) => {
-    console.log('🟢 User connected:', socket.id);
-    
-    socket.on('new-qso', async (qso) => {
-        const log = new Log(qso);
-        await log.save();
-        io.emit('live-qso', log);
-    });
-    
-    socket.on('leaderboard-request', async () => {
-        const leaderboard = await Log.aggregate([
-            { $group: { _id: "$callsign", count: { $sum: 1 } } },
-            { $sort: { count: -1 } },
-            { $limit: 50 }
-        ]);
-        socket.emit('leaderboard', leaderboard);
-    });
-    
-    socket.on('disconnect', () => console.log('🔴 User disconnected:', socket.id));
+  console.log('🔌 Socket connected:', socket.id);
+  
+  socket.on('qso', (qso) => {
+    socket.broadcast.emit('qsos', [qso]); // Broadcast to all
+    // Leaderboard logic here
+  });
+  
+  socket.on('auth', (token) => {
+    socket.emit('auth:ok');
+  });
+  
+  socket.on('disconnect', () => console.log('🔌 Socket disconnected:', socket.id));
 });
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`🚀 WRL Ultimate v3.0 on http://localhost:${PORT}`);
-});
+server.listen(3000, () => console.log('🚀 Server running on http://localhost:3000'));
