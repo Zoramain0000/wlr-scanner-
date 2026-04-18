@@ -1,0 +1,414 @@
+  <!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WRL Ultimate Logger</title>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: 'Courier New', monospace; 
+            background: #0a0a0a; 
+            color: #00ff00; 
+            overflow-x: hidden;
+        }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        .header { 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            margin-bottom: 20px; 
+            padding: 15px; 
+            background: #1a1a1a; 
+            border: 1px solid #333; 
+            border-radius: 8px;
+        }
+        .auth-controls { display: flex; gap: 10px; }
+        .btn { 
+            padding: 8px 16px; 
+            background: #004400; 
+            color: #00ff00; 
+            border: 1px solid #00aa00; 
+            border-radius: 4px; 
+            cursor: pointer; 
+            font-family: inherit;
+        }
+        .btn:hover { background: #006600; }
+        .btn-danger { background: #440000; border-color: #aa0000; }
+        .btn-danger:hover { background: #660000; }
+        .modal { 
+            display: none; 
+            position: fixed; 
+            top: 0; left: 0; 
+            width: 100%; height: 100%; 
+            background: rgba(0,0,0,0.9); 
+            z-index: 1000; 
+            align-items: center; 
+            justify-content: center;
+        }
+        .modal-content { 
+            background: #1a1a1a; 
+            padding: 30px; 
+            border: 2px solid #00ff00; 
+            border-radius: 8px; 
+            width: 90%; max-width: 400px;
+        }
+        .form-group { margin-bottom: 15px; }
+        input { 
+            width: 100%; 
+            padding: 12px; 
+            background: #0a0a0a; 
+            color: #00ff00; 
+            border: 1px solid #333; 
+            border-radius: 4px; 
+            font-family: inherit; 
+            font-size: 16px;
+        }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .panel { 
+            background: #1a1a1a; 
+            border: 1px solid #333; 
+            border-radius: 8px; 
+            padding: 20px; 
+            height: 500px; 
+            overflow-y: auto;
+        }
+        #map { height: 500px; border-radius: 8px; }
+        #radar { height: 500px; background: #000; position: relative; }
+        .qso-form { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+        input[readonly] { background: #002200; }
+        .log-entry { 
+            display: flex; 
+            gap: 10px; 
+            padding: 10px; 
+            border-bottom: 1px solid #333; 
+            font-size: 14px;
+        }
+        .leaderboard { list-style: none; }
+        .leaderboard li { 
+            display: flex; 
+            justify-content: space-between; 
+            padding: 10px; 
+            border-bottom: 1px solid #333;
+        }
+        .status { 
+            position: fixed; 
+            top: 20px; 
+            right: 20px; 
+            padding: 10px 20px; 
+            background: #1a1a1a; 
+            border: 1px solid #00ff00; 
+            border-radius: 20px; 
+            font-size: 12px;
+        }
+        .pulse { animation: pulse 2s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🌐 WRL Ultimate Logger</h1>
+            <div class="auth-controls">
+                <span id="userStatus">Guest</span>
+                <button class="btn" id="loginBtn" onclick="showLogin()">Login</button>
+                <button class="btn" id="registerBtn" onclick="showRegister()">Register</button>
+                <button class="btn btn-danger" id="logoutBtn" onclick="logout()" style="display:none;">Logout</button>
+            </div>
+        </div>
+
+        <div class="status pulse" id="status">Connecting...</div>
+
+        <div class="qso-form">
+            <input id="callsign" placeholder="Callsign" maxlength="12" autocomplete="off">
+            <input id="rst" placeholder="RST" maxlength="4">
+            <input id="freq" placeholder="Freq (MHz)" step="0.001">
+            <input id="mode" placeholder="Mode" list="modes">
+            <input id="band" placeholder="Band">
+            <button class="btn" onclick="addQSO()" disabled id="addBtn">Log QSO</button>
+            <datalist id="modes">
+                <option>CW</option><option>SSB</option><option>FT8</option><option>FT4</option><option>RTTY</option>
+            </datalist>
+        </div>
+
+        <div class="grid">
+            <div class="panel">
+                <h3>📡 Live Map</h3>
+                <div id="map"></div>
+            </div>
+            <div class="panel">
+                <h3>📡 DX Radar</h3>
+                <div id="radar"></div>
+            </div>
+        </div>
+
+        <div class="grid">
+            <div class="panel">
+                <h3>📋 My Log</h3>
+                <div id="log"></div>
+            </div>
+            <div class="panel">
+                <h3>🏆 Live Leaderboard</h3>
+                <ul class="leaderboard" id="leaderboard"></ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- Login Modal -->
+    <div class="modal" id="loginModal">
+        <div class="modal-content">
+            <h2>🔐 Login</h2>
+            <div class="form-group">
+                <input type="email" id="loginEmail" placeholder="Email" required>
+            </div>
+            <div class="form-group">
+                <input type="password" id="loginPassword" placeholder="Password" required>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <button class="btn" onclick="login()">Login</button>
+                <button class="btn" onclick="hideLogin()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Register Modal -->
+    <div class="modal" id="registerModal">
+        <div class="modal-content">
+            <h2>📝 Register</h2>
+            <div class="form-group">
+                <input type="text" id="regCallsign" placeholder="Callsign" required maxlength="12">
+            </div>
+            <div class="form-group">
+                <input type="email" id="regEmail" placeholder="Email" required>
+            </div>
+            <div class="form-group">
+                <input type="password" id="regPassword" placeholder="Password" required minlength="6">
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <button class="btn" onclick="register()">Register</button>
+                <button class="btn" onclick="hideRegister()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Auth State
+        let token = localStorage.getItem('token');
+        let user = JSON.parse(localStorage.getItem('user') || 'null');
+        let isAuthenticated = !!token;
+
+        // Socket.IO
+        const socket = io('http://localhost:3000');
+        let map, userMarker;
+
+        // Init
+        window.onload = init;
+
+        function init() {
+            updateAuthUI();
+            initMap();
+            socket.on('connect', () => {
+                document.getElementById('status').textContent = `Connected: ${socket.id.slice(0,8)}`;
+                if (isAuthenticated) socket.emit('auth', token);
+            });
+            socket.on('qsos', updateMap);
+            socket.on('leaderboard', updateLeaderboard);
+            socket.on('auth:ok', () => console.log('Socket authenticated'));
+            
+            // Callsign lookup
+            document.getElementById('callsign').addEventListener('blur', lookupCallsign);
+        }
+
+        function updateAuthUI() {
+            document.getElementById('userStatus').textContent = user ? `${user.callsign} (${user.email})` : 'Guest';
+            document.getElementById('loginBtn').style.display = isAuthenticated ? 'none' : 'inline';
+            document.getElementById('registerBtn').style.display = isAuthenticated ? 'none' : 'inline';
+            document.getElementById('logoutBtn').style.display = isAuthenticated ? 'inline' : 'none';
+            document.getElementById('addBtn').disabled = !isAuthenticated;
+        }
+
+        // Auth Functions
+        async function login() {
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+            
+            try {
+                const res = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+                const data = await res.json();
+                
+                if (res.ok) {
+                    token = data.token;
+                    user = data.user;
+                    localStorage.setItem('token', token);
+                    localStorage.setItem('user', JSON.stringify(user));
+                    isAuthenticated = true;
+                    hideLogin();
+                    updateAuthUI();
+                    socket.emit('auth', token);
+                } else {
+                    alert(data.message || 'Login failed');
+                }
+            } catch (err) {
+                alert('Network error');
+            }
+        }
+
+        async function register() {
+            const callsign = document.getElementById('regCallsign').value;
+            const email = document.getElementById('regEmail').value;
+            const password = document.getElementById('regPassword').value;
+            
+            try {
+                const res = await fetch('/api/auth/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ callsign, email, password })
+                });
+                const data = await res.json();
+                
+                if (res.ok) {
+                    token = data.token;
+                    user = data.user;
+                    localStorage.setItem('token', token);
+                    localStorage.setItem('user', JSON.stringify(user));
+                    isAuthenticated = true;
+                    hideRegister();
+                    updateAuthUI();
+                    socket.emit('auth', token);
+                } else {
+                    alert(data.message || 'Registration failed');
+                }
+            } catch (err) {
+                alert('Network error');
+            }
+        }
+
+        function logout() {
+            localStorage.removeItem('token');
+            localStorage.removeItem('user');
+            token = null;
+            user = null;
+            isAuthenticated = false;
+            updateAuthUI();
+        }
+
+        // Modal Controls
+        function showLogin() { document.getElementById('loginModal').style.display = 'flex'; }
+        function hideLogin() { document.getElementById('loginModal').style.display = 'none'; }
+        function showRegister() { document.getElementById('registerModal').style.display = 'flex'; }
+        function hideRegister() { document.getElementById('registerModal').style.display = 'none'; }
+
+        // Map
+        function initMap() {
+            map = L.map('map').setView([0, 0], 2);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+        }
+
+        function updateMap(qsos) {
+            // Clear existing markers
+            map.eachLayer(layer => { if (layer instanceof L.Marker) map.removeLayer(layer); });
+            
+            qsos.forEach(qso => {
+                if (qso.lat && qso.lon) {
+                    L.marker([qso.lat, qso.lon])
+                        .addTo(map)
+                        .bindPopup(`${qso.callsign}<br>${qso.freq} ${qso.mode}`);
+                }
+            });
+        }
+
+        // QSO Logging (Auth Protected)
+        async function addQSO() {
+            if (!isAuthenticated) return alert('Login required');
+            
+            const qso = {
+                callsign: document.getElementById('callsign').value,
+                rst: document.getElementById('rst').value,
+                freq: parseFloat(document.getElementById('freq').value),
+                mode: document.getElementById('mode').value,
+                band: document.getElementById('band').value,
+                timestamp: new Date().toISOString()
+            };
+
+            try {
+                const res = await fetch('/api/logs', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify(qso)
+                });
+                
+                if (res.ok) {
+                    socket.emit('qso', qso);
+                    clearForm();
+                    loadMyLog();
+                }
+            } catch (err) {
+                alert('Log failed');
+            }
+        }
+
+        async function loadMyLog() {
+            if (!isAuthenticated) return;
+            try {
+                const res = await fetch('/api/logs', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const logs = await res.json();
+                updateLogDisplay(logs);
+            } catch (err) {}
+        }
+
+        function updateLogDisplay(logs) {
+            const logDiv = document.getElementById('log');
+            logDiv.innerHTML = logs.map(log => `
+                <div class="log-entry">
+                    <span>${log.callsign}</span>
+                    <span>${log.rst}</span>
+                    <span>${log.freq}</span>
+                    <span>${log.mode}</span>
+                    <span>${new Date(log.timestamp).toLocaleTimeString()}</span>
+                </div>
+            `).join('');
+        }
+
+        function updateLeaderboard(data) {
+            const lb = document.getElementById('leaderboard');
+            lb.innerHTML = data.map((entry, i) => `
+                <li><span>#${i+1} ${entry.callsign}</span><span>${entry.count} QSOs</span></li>
+            `).join('');
+        }
+
+        function clearForm() {
+            document.getElementById('callsign').value = '';
+            document.getElementById('rst').value = '';
+            document.getElementById('freq').value = '';
+            document.getElementById('mode').value = '';
+            document.getElementById('band').value = '';
+        }
+
+        async function lookupCallsign() {
+            const callsign = document.getElementById('callsign').value.toUpperCase();
+            if (callsign.length < 3) return;
+            
+            try {
+                const res = await fetch(`https://api.hamdb.org/v1/${callsign}/JSON`);
+                const data = await res.json();
+                if (data && data.callsign) {
+                    document.getElementById('band').value = data.band || '';
+                }
+            } catch (err) {}
+        }
+    </script>
+</body>
+</html>
